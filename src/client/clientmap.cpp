@@ -120,12 +120,18 @@ namespace {
 	inline T subtract_or_zero(T a, T b) {
 		return b >= a ? T(0) : (a - b);
 	}
+
+	// file-scope thread-local instances of the above two data structures, because
+	// allocating memory in a hot path can be expensive.
+	thread_local MeshBufListMaps tl_meshbuflistmaps;
+	thread_local DrawDescriptorList tl_drawdescriptorlist;
 }
 
 void CachedMeshBuffer::drop()
 {
 	for (auto *it : buf)
 		it->drop();
+	buf.clear();
 }
 
 /*
@@ -204,6 +210,7 @@ ClientMap::~ClientMap()
 
 void ClientMap::updateCamera(v3f pos, v3f dir, f32 fov, v3s16 offset, video::SColor light_color)
 {
+	v3s16 previous_camera_offset = m_camera_offset;
 	v3s16 previous_node = floatToInt(m_camera_position, BS) + m_camera_offset;
 	v3s16 previous_block = getContainerPos(previous_node, MAP_BLOCKSIZE);
 
@@ -223,6 +230,13 @@ void ClientMap::updateCamera(v3f pos, v3f dir, f32 fov, v3s16 offset, video::SCo
 	// reorder transparent meshes when camera crosses node boundary
 	if (previous_node != current_node)
 		m_needs_update_transparent_meshes = true;
+
+	// drop merged mesh cache when camera offset changes
+	if (previous_camera_offset != m_camera_offset) {
+		for (auto &it : m_dynamic_buffers)
+			it.second.drop();
+		m_dynamic_buffers.clear();
+	}
 }
 
 MapSector * ClientMap::emergeSector(v2s16 p2d)
@@ -791,6 +805,27 @@ void MeshBufListMaps::addFromBlock(v3s16 block_pos, MapBlockMesh *block_mesh,
 	}
 }
 
+namespace {
+	// there is no convenient scope this would fit, so it's global
+	struct {
+		u32 total = 0, cache_miss = 0;
+
+		inline void increment(bool hit)
+		{
+			total++;
+			cache_miss += hit ? 0 : 1;
+		}
+		inline void commit(Profiler *profiler)
+		{
+			if (total == 0)
+				return;
+			float rate = (total - cache_miss) / (float)total;
+			profiler->avg("CM::transformBuffers...: cache hit rate [%]", 100 * rate);
+			*this = {0, 0};
+		}
+	} buffer_transform_stats;
+}
+
 /**
  * Copy a list of mesh buffers into the draw order, while potentially
  * merging some.
@@ -865,8 +900,9 @@ static u32 transformBuffersToDrawOrder(
 	// try to take from cache
 	auto it2 = dynamic_buffers.find(key);
 	if (it2 != dynamic_buffers.end()) {
-		g_profiler->avg("CM::transformBuffersToDO: cache hit rate", 1);
+		buffer_transform_stats.increment(true);
 		const auto &use_mat = to_merge.front().second->getMaterial();
+		assert(!it2->second.buf.empty());
 		for (auto *buf : it2->second.buf) {
 			// material is not part of the cache key, so make sure it still matches
 			buf->getMaterial() = use_mat;
@@ -874,7 +910,7 @@ static u32 transformBuffersToDrawOrder(
 		}
 		it2->second.age = 0;
 	} else if (!key.empty()) {
-		g_profiler->avg("CM::transformBuffersToDO: cache hit rate", 0);
+		buffer_transform_stats.increment(false);
 		// merge and save to cache
 		auto &put_buffers = dynamic_buffers[key];
 		scene::SMeshBuffer *tmp = nullptr;
@@ -968,8 +1004,10 @@ void ClientMap::renderMap(video::IVideoDriver* driver, s32 pass)
 	*/
 	TimeTaker tt_collect("");
 
-	MeshBufListMaps grouped_buffers;
-	DrawDescriptorList draw_order;
+	MeshBufListMaps &grouped_buffers = tl_meshbuflistmaps;
+	DrawDescriptorList &draw_order = tl_drawdescriptorlist;
+	grouped_buffers.clear();
+	draw_order.clear();
 
 	auto is_frustum_culled = m_client->getCamera()->getFrustumCuller();
 
@@ -1097,6 +1135,8 @@ void ClientMap::renderMap(video::IVideoDriver* driver, s32 pass)
 			}
 		}
 		g_profiler->avg(prefix + "merged buffers in cache [#]", cached_count);
+
+		buffer_transform_stats.commit(g_profiler);
 	}
 
 	if (pass == scene::ESNRP_TRANSPARENT) {
@@ -1365,8 +1405,10 @@ void ClientMap::renderMapShadows(video::IVideoDriver *driver,
 		return intToFloat(mesh_grid.getMeshPos(pos) * MAP_BLOCKSIZE - m_camera_offset, BS);
 	};
 
-	MeshBufListMaps grouped_buffers;
-	DrawDescriptorList draw_order;
+	MeshBufListMaps &grouped_buffers = tl_meshbuflistmaps;
+	DrawDescriptorList &draw_order = tl_drawdescriptorlist;
+	grouped_buffers.clear();
+	draw_order.clear();
 
 	std::size_t count = 0;
 	std::size_t meshes_per_frame = m_drawlist_shadow.size() / total_frames + 1;

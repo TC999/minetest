@@ -250,7 +250,7 @@ bool read_schematic_def(lua_State *L, int index,
 		u8 param2 = getintfield_default(L, -1, "param2", 0);
 
 		//// Find or add new nodename-to-ID mapping
-		std::unordered_map<std::string, content_t>::iterator it = name_id_map.find(name);
+		auto it = name_id_map.find(name);
 		content_t name_index;
 		if (it != name_id_map.end()) {
 			name_index = it->second;
@@ -428,7 +428,7 @@ size_t get_biome_list(lua_State *L, int index,
 	if (is_single) {
 		Biome *biome = get_or_load_biome(L, index, biomemgr);
 		if (!biome) {
-			infostream << "get_biome_list: failed to get biome '"
+			warningstream << "get_biome_list: failed to get biome '"
 				<< (lua_isstring(L, index) ? lua_tostring(L, index) : "")
 				<< "'." << std::endl;
 			return 1;
@@ -445,7 +445,7 @@ size_t get_biome_list(lua_State *L, int index,
 		Biome *biome = get_or_load_biome(L, -1, biomemgr);
 		if (!biome) {
 			fail_count++;
-			infostream << "get_biome_list: failed to get biome '"
+			warningstream << "get_biome_list: failed to get biome '"
 				<< (lua_isstring(L, -1) ? lua_tostring(L, -1) : "")
 				<< "'" << std::endl;
 			continue;
@@ -552,24 +552,33 @@ int ModApiMapgen::l_get_biome_data(lua_State *L)
 	if (!biomegen)
 		return 0;
 
-	const Biome *biome = biomegen->calcBiomeAtPoint(pos);
-	if (!biome || biome->index == OBJDEF_INVALID_INDEX)
-		return 0;
-
-	lua_newtable(L);
-
-	lua_pushinteger(L, biome->index);
-	lua_setfield(L, -2, "biome");
-
 	if (biomegen->getType() == BIOMEGEN_ORIGINAL) {
 		float heat = ((BiomeGenOriginal*) biomegen)->calcHeatAtPoint(pos);
 		float humidity = ((BiomeGenOriginal*) biomegen)->calcHumidityAtPoint(pos);
+		const Biome *biome = ((BiomeGenOriginal*) biomegen)->calcBiomeFromNoise(heat, humidity, pos);
+		if (!biome || biome->index == OBJDEF_INVALID_INDEX)
+			return 0;
+
+		lua_newtable(L);
+
+		lua_pushinteger(L, biome->index);
+		lua_setfield(L, -2, "biome");
 
 		lua_pushnumber(L, heat);
 		lua_setfield(L, -2, "heat");
 
 		lua_pushnumber(L, humidity);
 		lua_setfield(L, -2, "humidity");
+
+	} else {
+		const Biome *biome = biomegen->calcBiomeAtPoint(pos);
+		if (!biome || biome->index == OBJDEF_INVALID_INDEX)
+			return 0;
+
+		lua_newtable(L);
+
+		lua_pushinteger(L, biome->index);
+		lua_setfield(L, -2, "biome");
 	}
 
 	return 1;
@@ -856,13 +865,32 @@ int ModApiMapgen::l_get_mapgen_edges(lua_State *L)
 	} else {
 		std::string chunksize_str;
 		settingsmgr->getMapSetting("chunksize", &chunksize_str);
-		chunksize = stoi(chunksize_str, -32768, 32767);
+		chunksize = stoi(chunksize_str, 1, 10);
 	}
 
 	std::pair<s16, s16> edges = get_mapgen_edges(mapgen_limit, chunksize);
 	push_v3s16(L, v3s16(1, 1, 1) * edges.first);
 	push_v3s16(L, v3s16(1, 1, 1) * edges.second);
 	return 2;
+}
+
+// get_mapgen_chunksize()
+int ModApiMapgen::l_get_mapgen_chunksize(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	const MapSettingsManager *settingsmgr = getEmergeManager(L)->map_settings_mgr;
+
+	// MapSettingsManager::makeMapgenParams cannot be used here because it would
+	// make mapgen settings immutable from then on. Mapgen settings should stay
+	// mutable until after mod loading ends.
+
+	std::string chunksize_str;
+	settingsmgr->getMapSetting("chunksize", &chunksize_str);
+	s16 chunksize = stoi(chunksize_str, 1, 10);
+
+	push_v3s16(L, {chunksize, chunksize, chunksize});
+	return 1;
 }
 
 // get_mapgen_setting(name)
@@ -2016,6 +2044,7 @@ void ModApiMapgen::Initialize(lua_State *L, int top)
 	API_FCT(get_mapgen_params);
 	API_FCT(set_mapgen_params);
 	API_FCT(get_mapgen_edges);
+	API_FCT(get_mapgen_chunksize);
 	API_FCT(get_mapgen_setting);
 	API_FCT(set_mapgen_setting);
 	API_FCT(get_mapgen_setting_noiseparams);
@@ -2058,6 +2087,7 @@ void ModApiMapgen::InitializeEmerge(lua_State *L, int top)
 	API_FCT(get_seed);
 	API_FCT(get_mapgen_params);
 	API_FCT(get_mapgen_edges);
+	API_FCT(get_mapgen_chunksize);
 	API_FCT(get_mapgen_setting);
 	API_FCT(get_mapgen_setting_noiseparams);
 	API_FCT(get_noiseparams);

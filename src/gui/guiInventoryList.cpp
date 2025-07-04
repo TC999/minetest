@@ -4,7 +4,7 @@
 
 #include "guiInventoryList.h"
 #include "guiFormSpecMenu.h"
-#include "client/hud.h"
+#include "drawItemStack.h"
 #include "client/client.h"
 #include "client/renderingengine.h"
 #include <IVideoDriver.h>
@@ -85,6 +85,10 @@ void GUIInventoryList::draw()
 		v2s32 p((i % m_geom.X) * m_slot_spacing.X,
 				(i / m_geom.X) * m_slot_spacing.Y);
 		core::rect<s32> rect = imgrect + base_pos + p;
+
+		if (!getAbsoluteClippingRect().isRectCollided(rect))
+			continue; // out of (parent) clip area
+
 		const ItemStack &orig_item = ilist->getItem(item_i);
 		ItemStack item = orig_item;
 
@@ -201,6 +205,9 @@ bool GUIInventoryList::OnEvent(const SEvent &event)
 
 	bool ret = hovered->OnEvent(event);
 
+	// Set visible again *after* processing the event. Otherwise, hovered could
+	// be another GUIInventoryList, which will call this one again, resulting in
+	// an infinite loop.
 	IsVisible = was_visible;
 
 	return ret;

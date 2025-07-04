@@ -4,6 +4,7 @@
 
 #include "CXMeshFileLoader.h"
 #include "SkinnedMesh.h"
+#include "Transform.h"
 #include "os.h"
 
 #include "fast_atof.h"
@@ -54,7 +55,7 @@ IAnimatedMesh *CXMeshFileLoader::createMesh(io::IReadFile *file)
 	u32 time = os::Timer::getRealTime();
 #endif
 
-	AnimatedMesh = new SkinnedMeshBuilder();
+	AnimatedMesh = new SkinnedMeshBuilder(SkinnedMesh::SourceFormat::X);
 
 	SkinnedMesh *res = nullptr;
 	if (load(file)) {
@@ -513,6 +514,7 @@ bool CXMeshFileLoader::parseDataObjectFrame(SkinnedMesh::SJoint *Parent)
 		if (n.has_value()) {
 			JointID = *n;
 			joint = AnimatedMesh->getAllJoints()[JointID];
+			joint->setParent(Parent);
 		}
 	}
 
@@ -527,8 +529,6 @@ bool CXMeshFileLoader::parseDataObjectFrame(SkinnedMesh::SJoint *Parent)
 #ifdef _XREADER_DEBUG
 		os::Printer::log("using joint ", name.c_str(), ELL_DEBUG);
 #endif
-		if (Parent)
-			Parent->Children.push_back(joint);
 	}
 
 	// Now inside a frame.
@@ -552,12 +552,10 @@ bool CXMeshFileLoader::parseDataObjectFrame(SkinnedMesh::SJoint *Parent)
 			if (!parseDataObjectFrame(joint))
 				return false;
 		} else if (objectName == "FrameTransformMatrix") {
-			if (!parseDataObjectTransformationMatrix(joint->LocalMatrix))
+			core::matrix4 matrix;
+			if (!parseDataObjectTransformationMatrix(matrix))
 				return false;
-
-			// joint->LocalAnimatedMatrix
-			// joint->LocalAnimatedMatrix.makeInverse();
-			// joint->LocalMatrix=tmp*joint->LocalAnimatedMatrix;
+			joint->transform = matrix;
 		} else if (objectName == "Mesh") {
 			/*
 			frame.Meshes.push_back(SXMesh());
@@ -1525,8 +1523,6 @@ bool CXMeshFileLoader::parseDataObjectAnimationKey(SkinnedMesh::SJoint *joint)
 				os::Printer::log("No finishing semicolon after matrix animation key in x file", ELL_WARNING);
 				os::Printer::log("Line", core::stringc(Line).c_str(), ELL_WARNING);
 			}
-
-			// core::vector3df rotation = mat.getRotationDegrees();
 
 			AnimatedMesh->addRotationKey(joint, time, core::quaternion(mat.getTransposed()));
 			AnimatedMesh->addPositionKey(joint, time, mat.getTranslation());
