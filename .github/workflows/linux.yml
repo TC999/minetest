@@ -15,6 +15,7 @@ on:
       - 'cmake/Modules/**'
       - 'po/**.po'
       - 'util/ci/**'
+      - 'util/helper_mod/**'
       - '.github/workflows/linux.yml'
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - 'cmake/Modules/**'
       - 'po/**.po'
       - 'util/ci/**'
+      - 'util/helper_mod/**'
       - '.github/workflows/linux.yml'
 
 env:
