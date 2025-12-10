@@ -8,7 +8,7 @@
 #include "inputhandler.h"
 #include "gui/mainmenumanager.h"
 #include "gui/touchcontrols.h"
-#include "hud.h"
+#include "hud_element.h"
 #include "log_internal.h"
 #include "client/renderingengine.h"
 
@@ -143,8 +143,7 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
 				IrrlichtDevice *device = RenderingEngine::get_raw_device();
 
 				bool new_fullscreen = !device->isFullscreen();
-				// Only update the setting if toggling succeeds - it always fails
-				// if Minetest was built without SDL.
+				// Only update the setting if toggling succeeds
 				if (device->setFullscreen(new_fullscreen)) {
 					g_settings->setBool("fullscreen", new_fullscreen);
 				}

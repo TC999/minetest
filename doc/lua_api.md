@@ -84,6 +84,9 @@ The game directory can contain the following files:
       When both `allowed_mapgens` and `disallowed_mapgens` are
       specified, `allowed_mapgens` is applied before
       `disallowed_mapgens`.
+    * `default_mapgen`
+      e.g. `default_mapgen = valleys`
+      Set default mapgen for game, this will be the default selection when creating a new world.
     * `disallowed_mapgen_settings= <comma-separated mapgen settings>`
       e.g. `disallowed_mapgen_settings = mgv5_spflags`
       These mapgen settings are hidden for this game in the world creation
@@ -2705,10 +2708,10 @@ Some of the values in the key-value store are handled specially:
   See also: `get_description` in [`ItemStack`](#itemstack)
 * `short_description`: Set the item stack's short description.
   See also: `get_short_description` in [`ItemStack`](#itemstack)
-* `inventory_image`: Override inventory_image
-* `inventory_overlay`: Override inventory_overlay
-* `wield_image`: Override wield_image
-* `wield_overlay`: Override wield_overlay
+* `inventory_image`: Override inventory_image.name
+* `inventory_overlay`: Override inventory_overlay.name
+* `wield_image`: Override wield_image.name
+* `wield_overlay`: Override wield_overlay.name
 * `wield_scale`: Override wield_scale, use vector.to_string
 * `color`: A `ColorString`, which sets the stack's color.
 * `palette_index`: If the item has a palette, this is used to get the
@@ -3920,10 +3923,8 @@ The following functions provide escape sequences:
     * `color` is a ColorString
     * The escape sequence sets the text color to `color`
 * `core.colorize(color, message)`:
-    * Equivalent to:
-      `core.get_color_escape_sequence(color) ..
-      message ..
-      core.get_color_escape_sequence("#ffffff")`
+    * Equivalent to including the right color escape sequence in the front,
+      and resetting to `#fff` after the text (plus newline handling).
 * `core.get_background_escape_sequence(color)`
     * `color` is a ColorString
     * The escape sequence sets the background of the whole text element to
@@ -3934,6 +3935,10 @@ The following functions provide escape sequences:
     * Removes background colors added by `get_background_escape_sequence`.
 * `core.strip_colors(str)`
     * Removes all color escape sequences.
+* `core.strip_escapes(str)`
+    * Removes all escape sequences, including client-side translations and
+      any unknown or future escape sequences that Luanti might define.
+    * You can use this to clean text before logging or handing to an external system.
 
 
 Coordinate System
@@ -4223,6 +4228,11 @@ Helper functions
     * e.g. `"a,b":split","` returns `{"a","b"}`
 * `string:trim()`: returns the string without whitespace pre- and suffixes
     * e.g. `"\n \t\tfoo bar\t ":trim()` returns `"foo bar"`
+* Utilities for working with binary data:
+    * `string.pack(fmt, ...)`
+    * `string.unpack(fmt, s, [pos])`
+    * `string.packsize(fmt)`
+    * Backported from Lua 5.4, see https://www.lua.org/manual/5.4/manual.html#6.4.2
 * `core.wrap_text(str, limit, as_table)`: returns a string or table
     * Adds newlines to the string to keep it within the specified character
       limit
@@ -5843,6 +5853,15 @@ Utilities
       object_guids = true,
       -- The NodeTimer `on_timer` callback is passed additional `node` and `timeout` args (5.14.0)
       on_timer_four_args = true,
+      -- `ParticleSpawner` definition supports `exclude_player` field (5.14.0)
+      particlespawner_exclude_player = true,
+      -- core.generate_decorations() supports `use_mapgen_biomes` parameter (5.14.0)
+      generate_decorations_biomes = true,
+      -- 'chunksize' mapgen setting can be a vector, instead of a single number (5.15.0)
+      chunksize_vector = true,
+      -- Item definition fields `inventory_image`, `inventory_overlay`, `wield_image`
+      -- and `wield_overlay` accept a table containing animation definitions. (5.15.0)
+      item_image_animation = true,
   }
   ```
 
@@ -5948,7 +5967,8 @@ Utilities
       touch_controls = false,
   }
   ```
-
+* `core.path_exists(path)`: returns true if the given path exists else false
+    * `path` is the path that will be tested can be either a directory or a file
 * `core.mkdir(path)`: returns success.
     * Creates a directory specified by `path`, creating parent directories
       if they don't exist.
@@ -6029,7 +6049,8 @@ Logging
 -------
 
 * `core.debug(...)`
-    * Equivalent to `core.log(table.concat({...}, "\t"))`
+    * Calls `core.log` with all arguments converted to string and separated by tabs
+      (similar to `print`).
 * `core.log([level,] text)`
     * `level` is one of `"none"`, `"error"`, `"warning"`, `"action"`,
       `"info"`, or `"verbose"`.  Default is `"none"`.
@@ -6698,7 +6719,7 @@ Environment access
       in that order.
     * `mapgen_limit` is an optional number. If it is absent, its value is that
       of the *active* mapgen setting `"mapgen_limit"`.
-    * `chunksize` is an optional number. If it is absent, its value is that
+    * `chunksize` is an optional number or vector. If it is absent, its value is that
       of the *active* mapgen setting `"chunksize"`.
 * `core.get_mapgen_chunksize()`
     * Returns the currently active chunksize of the mapgen, as a vector.
@@ -6735,10 +6756,14 @@ Environment access
     * Generate all registered ores within the VoxelManip `vm` and in the area
       from `pos1` to `pos2`.
     * `pos1` and `pos2` are optional and default to mapchunk minp and maxp.
-* `core.generate_decorations(vm[, pos1, pos2])`
+* `core.generate_decorations(vm[, pos1, pos2, [use_mapgen_biomes]])`
     * Generate all registered decorations within the VoxelManip `vm` and in the
       area from `pos1` to `pos2`.
     * `pos1` and `pos2` are optional and default to mapchunk minp and maxp.
+    * `use_mapgen_biomes` (optional boolean). For use in on_generated callbacks only.
+       If set to true, decorations are placed in respect to the biome map of the current chunk.
+       `pos1` and `pos2` must match the positions of the current chunk, or an error will be raised.
+       default: `false`
 * `core.clear_objects([options])`
     * Clear all objects in the environment
     * Takes an optional table as an argument with the field `mode`.
@@ -7471,6 +7496,7 @@ Particles
 ---------
 
 * `core.add_particle(particle definition)`
+    * Spawn a single particle
     * Deprecated: `core.add_particle(pos, velocity, acceleration,
       expirationtime, size, collisiondetection, texture, playername)`
 
@@ -8512,7 +8538,7 @@ child will follow movement and rotation of that bone.
     * Attaches object to `parent`
     * See 'Attachments' section for details
     * `parent`: `ObjectRef` to attach to
-    * `bone`: Bone to attach to. Default is `""` (the root bone)
+    * `bone`: Bone to attach to. Default is `""` which attaches to the parent object's origin.
     * `position`: relative position, default `{x=0, y=0, z=0}`
     * `rotation`: relative rotation in degrees, default `{x=0, y=0, z=0}`
     * `forced_visible`: Boolean to control whether the attached entity
@@ -8640,7 +8666,9 @@ child will follow movement and rotation of that bone.
     * Does not reset rotation incurred through `automatic_rotate`.
       Remove & re-add your objects to force a certain rotation.
 * `get_rotation()`: returns the rotation, a vector (radians)
-* `set_yaw(yaw)`: sets the yaw in radians (heading).
+* `set_yaw(yaw)`
+    * Sets the yaw in radians (heading).
+    * Also resets pitch and roll to 0.
 * `get_yaw()`: returns number in radians
 * `set_texture_mod(mod)`
     * Set a texture modifier to the base texture, for sprites and meshes.
@@ -9017,6 +9045,7 @@ child will follow movement and rotation of that bone.
             alpha channel is used to set overall star brightness.
             (default: `#ebebff69`)
         * `scale`: Float controlling the overall size of the stars (default: `1`)
+        * `star_seed`: Integer number which decides how to generate the sky stars. If set to zero, client picks a random number. (default: `0`)
 * `get_stars()`: returns a table with the current stars parameters as in
     `set_stars`.
 * `set_clouds(cloud_parameters)`: set cloud parameters
@@ -9500,6 +9529,7 @@ Player properties need to be saved manually.
     --   `core.itemstring_with_palette()`), the entity will inherit the color.
     --   Wielditems are scaled a bit. If you want a wielditem to appear
     --   to be as large as a node, use `0.667` in `visual_size`
+    --   Currently, item image animations are not played. This may change in the future.
     -- "item" is similar to "wielditem" but ignores the 'wield_image' parameter.
     -- "node" looks exactly like a node in-world (supported since 5.12.0)
     --   Note that visual effects like waving or liquid reflections will not work.
@@ -9591,6 +9621,16 @@ Player properties need to be saved manually.
     nametag_bgcolor = <ColorSpec>,
     -- Sets background color of nametag
     -- `false` will cause the background to be set automatically based on user settings.
+    -- Default: false
+
+    nametag_fontsize = 1,
+    -- Sets the font size of the nametag in pixels.
+    -- `false` will cause the size to be set automatically based on user settings.
+    -- Default: false
+
+    nametag_scale_z = false,
+    -- If enabled, the nametag will be scaled by Z in screen space, meaning it becomes
+    -- smaller the further away the object is.
     -- Default: false
 
     infotext = "",
@@ -9830,6 +9870,13 @@ Tile animation definition
 }
 ```
 
+Item image definition
+---------------------
+
+* `"image.png"`
+* `{name="image.png", animation={Tile Animation definition}}`
+    * Basically a tile definition but for items
+
 Item definition
 ---------------
 
@@ -9856,18 +9903,18 @@ Used by `core.register_node`, `core.register_craftitem`, and
     --      {bendy = 2, snappy = 1},
     --      {hard = 1, metal = 1, spikes = 1}
 
-    inventory_image = "",
-    -- Texture shown in the inventory GUI
+    inventory_image = <Item image definition>,
+    -- Image shown in the inventory GUI
     -- Defaults to a 3D rendering of the node if left empty.
 
-    inventory_overlay = "",
-    -- An overlay texture which is not affected by colorization
+    inventory_overlay = <Item image definition>,
+    -- An overlay image which is not affected by colorization
 
-    wield_image = "",
-    -- Texture shown when item is held in hand
+    wield_image = <Item image definition>,
+    -- Image shown when item is held in hand
     -- Defaults to a 3D rendering of the node if left empty.
 
-    wield_overlay = "",
+    wield_overlay = <Item image definition>,
     -- Like inventory_overlay but only used in the same situation as wield_image
 
     wield_scale = {x = 1, y = 1, z = 1},
@@ -11487,6 +11534,9 @@ Used by `core.add_particle`.
     playername = "singleplayer",
     -- Optional, if specified spawns particle only on the player's client
 
+    -- Note that `exclude_player` is not supported here. You can use a single-use
+    -- particlespawner if needed.
+
     animation = {Tile Animation definition},
     -- Optional, specifies how to animate the particle texture
 
@@ -11550,6 +11600,9 @@ will be ignored.
     -- If time is 0 spawner has infinite lifespan and spawns the `amount` on
     -- a per-second basis.
 
+    size = 1,
+    -- Size of the particle.
+
     collisiondetection = false,
     -- If true collide with `walkable` nodes and, depending on the
     -- `object_collision` field, objects too.
@@ -11576,7 +11629,12 @@ will be ignored.
     -- following section.
 
     playername = "singleplayer",
-    -- Optional, if specified spawns particles only on the player's client
+    -- Optional, if specified spawns particles only for this player
+    -- Can't be used together with `exclude_player`.
+
+    exclude_player = "singleplayer",
+    -- Optional, if specified spawns particles not for this player
+    -- Added in v5.14.0. Can't be used together with `playername`.
 
     animation = {Tile Animation definition},
     -- Optional, specifies how to animate the particles' texture

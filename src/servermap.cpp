@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2010-2024 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-#include <algorithm>
+#include "servermap.h"
 
 #include "map.h"
 #include "mapsector.h"
@@ -16,18 +16,18 @@
 #include "profiler.h"
 #include "gamedef.h"
 #include "util/directiontables.h"
+#include "util/serialize.h"
 #include "rollback_interface.h"
 #include "reflowscan.h"
 #include "emerge.h"
-#include "mapgen/mapgen_v6.h"
 #include "mapgen/mg_biome.h"
 #include "config.h"
 #include "server.h"
+#include "serverenvironment.h"
 #include "database/database.h"
 #include "database/database-dummy.h"
 #include "database/database-sqlite3.h"
 #include "script/scripting_server.h"
-#include "irrlicht_changes/printing.h"
 #if USE_LEVELDB
 #include "database/database-leveldb.h"
 #endif
@@ -200,9 +200,9 @@ bool ServerMap::blockpos_over_mapgen_limit(v3s16 p)
 bool ServerMap::initBlockMake(v3s16 blockpos, BlockMakeData *data)
 {
 	assert(data);
-	s16 csize = getMapgenParams()->chunksize;
+	const v3s16 csize = getMapgenParams()->chunksize;
 	const v3s16 bpmin = EmergeManager::getContainingChunk(blockpos, csize);
-	const v3s16 bpmax = bpmin + v3s16(1, 1, 1) * (csize - 1);
+	const v3s16 bpmax = bpmin + csize - v3s16(1);
 
 	if (!m_chunks_in_progress.insert(bpmin).second)
 		return false;
@@ -339,7 +339,9 @@ void ServerMap::finishBlockMake(BlockMakeData *data,
 
 		/* Border blocks are grabbed during
 		   generation but mustn't be marked generated. */
-		if (bp >= bpmin && bp <= bpmax) {
+		if (bp.X >= bpmin.X && bp.X <= bpmax.X
+				&& bp.Y >= bpmin.Y && bp.Y <= bpmax.Y
+				&& bp.Z >= bpmin.Z && bp.Z <= bpmax.Z) {
 			block->setGenerated(true);
 			// Set timestamp to ensure correct application
 			// of LBMs and other stuff.
@@ -769,7 +771,6 @@ MapBlock *ServerMap::loadBlock(const std::string &blob, v3s16 p3d, bool save_aft
 		if (!modified_blocks.empty()) {
 			MapEditEvent event;
 			event.type = MEET_OTHER;
-			event.low_priority = true;
 			event.setModifiedBlocks(modified_blocks);
 			dispatchEvent(event);
 		}

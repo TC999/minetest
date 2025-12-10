@@ -3,68 +3,76 @@
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "server.h"
-#include <iostream>
-#include <queue>
-#include <algorithm>
-#include "irr_v2d.h"
-#include "network/connection.h"
-#include "network/networkpacket.h"
-#include "network/networkprotocol.h"
-#include "network/serveropcodes.h"
-#include "server/ban.h"
-#include "environment.h"
-#include "servermap.h"
-#include "threading/mutex_auto_lock.h"
-#include "constants.h"
-#include "voxel.h"
+
+#include "chat_interface.h"
+#include "chatmessage.h"
 #include "config.h"
-#include "version.h"
-#include "filesys.h"
-#include "mapblock.h"
-#include "server/serveractiveobject.h"
-#include "serialization.h" // SER_FMT_VER_INVALID
-#include "settings.h"
-#include "profiler.h"
-#include "log.h"
-#include "scripting_server.h"
-#include "nodedef.h"
-#include "itemdef.h"
-#include "craftdef.h"
-#include "emerge.h"
-#include "mapgen/mapgen.h"
-#include "mapgen/mg_biome.h"
-#include "content_mapnode.h"
+#include "constants.h"
 #include "content_nodemeta.h"
-#include "content/mods.h"
-#include "modchannels.h"
-#include "server/serverlist.h"
-#include "util/string.h"
+#include "craftdef.h"
+#include "environment.h"
+#include "filesys.h"
+#include "gameparams.h"
+#include "gettext.h"
+#include "irr_v2d.h"
+#include "itemdef.h"
+#include "log.h"
+#include "mapblock.h"
+#include "nodedef.h"
+#include "particles.h"
+#include "profiler.h"
+#include "remoteplayer.h"
+#include "server/ban.h"
+#include "serverenvironment.h"
+#include "servermap.h"
+#include "server/player_sao.h"
 #include "server/rollback.h"
-#include "util/serialize.h"
-#include "util/thread.h"
-#include "defaultsettings.h"
-#include "server/mods.h"
+#include "server/serveractiveobject.h"
+#include "server/serverinventorymgr.h"
+#include "server/serverlist.h"
+#include "settings.h"
+#include "translation.h"
 #include "util/base64.h"
 #include "util/hashing.h"
 #include "util/hex.h"
+#include "util/serialize.h"
+#include "util/string.h"
+#include "util/thread.h"
+#include "util/tracy_wrapper.h"
+#include "version.h"
+
+// Mapgen
+#include "emerge.h"
+#include "mapgen/mapgen.h"
+#include "mapgen/mg_biome.h"
+
+// Modding
+#include "modchannels.h"
+#include "script/common/c_types.h" // LuaError
+#include "scripting_server.h"
+#include "server/mods.h" // ServerModManager
+
+// Network
+#include "network/connection.h"
+#include "network/networkexceptions.h"
+#include "network/networkpacket.h"
+#include "network/networkprotocol.h"
+#include "network/serveropcodes.h"
+#include "serialization.h" // SER_FMT_VER_INVALID
+
+// Database
 #include "database/database.h"
-#include "chatmessage.h"
-#include "chat_interface.h"
-#include "remoteplayer.h"
-#include "server/player_sao.h"
-#include "server/serverinventorymgr.h"
-#include "translation.h"
 #include "database/database-sqlite3.h"
 #if USE_POSTGRESQL
 #include "database/database-postgresql.h"
 #endif
 #include "database/database-files.h"
 #include "database/database-dummy.h"
-#include "gameparams.h"
-#include "particles.h"
-#include "gettext.h"
-#include "util/tracy_wrapper.h"
 
+#include <iostream>
+#include <queue>
+#include <algorithm>
+#include <sstream>
 #include <csignal>
 
 class ClientNotFoundException : public BaseException
@@ -128,7 +136,6 @@ void *ServerThread::run()
 
 	while (!stopRequested()) {
 		framemarker.start();
-		ScopeProfiler spm(g_profiler, "Server::RunStep() (max)", SPT_MAX);
 
 		u64 t0 = porting::getTimeUs();
 
@@ -408,7 +415,7 @@ Server::~Server()
 	// Clean up files
 	for (auto &it : m_media) {
 		if (it.second.delete_at_shutdown) {
-			fs::DeleteSingleFileOrEmptyDirectory(it.second.path);
+			fs::DeleteSingleFileOrEmptyDirectory(it.second.path, true);
 		}
 	}
 
@@ -758,7 +765,6 @@ void Server::AsyncRunStep(float dtime, bool initial_step)
 		if (!modified_blocks.empty()) {
 			MapEditEvent event;
 			event.type = MEET_OTHER;
-			event.low_priority = true;
 			event.setModifiedBlocks(modified_blocks);
 			m_env->getMap().dispatchEvent(event);
 		}
@@ -804,6 +810,12 @@ void Server::AsyncRunStep(float dtime, bool initial_step)
 		counter += dtime;
 	}
 #endif
+
+	// Send queued particles
+	{
+		EnvAutoLock envlock(this);
+		SendSpawnParticles();
+	}
 
 	/*
 		Check added and deleted active objects
@@ -1010,7 +1022,7 @@ void Server::AsyncRunStep(float dtime, bool initial_step)
 			}
 			case MEET_OTHER:
 				prof.add("MEET_OTHER", 1);
-				m_clients.markBlocksNotSent(event->modified_blocks, event->low_priority);
+				m_clients.markBlocksNotSent(event->modified_blocks);
 				break;
 			default:
 				prof.add("unknown", 1);
@@ -1026,7 +1038,7 @@ void Server::AsyncRunStep(float dtime, bool initial_step)
 			*/
 			for (const u16 far_player : far_players) {
 				if (RemoteClient *client = getClient(far_player))
-					client->SetBlocksNotSent(event->modified_blocks, event->low_priority);
+					client->SetBlocksNotSent(event->modified_blocks);
 			}
 
 			delete event;
@@ -1603,88 +1615,126 @@ void Server::SendShowFormspecMessage(session_t peer_id, const std::string &forms
 	Send(&pkt);
 }
 
-// Spawns a particle on peer with peer_id
-void Server::SendSpawnParticle(session_t peer_id, u16 protocol_version,
-	const ParticleParameters &p)
+void Server::SendSpawnParticles(RemotePlayer *player,
+		const std::vector<ParticleParameters> &particles)
 {
 	static thread_local const float radius =
-			g_settings->getS16("max_block_send_distance") * MAP_BLOCKSIZE * BS;
+		g_settings->getS16("max_block_send_distance") * MAP_BLOCKSIZE * BS;
+	const float radius_sq = radius * radius;
 
-	if (peer_id == PEER_ID_INEXISTENT) {
-		std::vector<session_t> clients = m_clients.getClientIDs();
-		const v3f pos = p.pos * BS;
-		const float radius_sq = radius * radius;
-
-		for (const session_t client_id : clients) {
-			RemotePlayer *player = m_env->getPlayer(client_id);
-			if (!player)
-				continue;
-
-			PlayerSAO *sao = player->getPlayerSAO();
-			if (!sao)
-				continue;
-
-			// Do not send to distant clients
-			if (sao->getBasePosition().getDistanceFromSQ(pos) > radius_sq)
-				continue;
-
-			SendSpawnParticle(client_id, player->protocol_version, p);
-		}
+	PlayerSAO *sao = player->getPlayerSAO();
+	if (!sao || sao->isGone())
 		return;
+
+	std::ostringstream particle_batch_data(std::ios_base::binary);
+	for (const auto &particle : particles) {
+		if (sao->getBasePosition().getDistanceFromSQ(particle.pos * BS) > radius_sq)
+			continue; // out of range
+
+		std::ostringstream particle_data(std::ios_base::binary);
+		particle.serialize(particle_data, player->protocol_version);
+		std::string particle_data_str = particle_data.str();
+		SANITY_CHECK(particle_data_str.size() < U32_MAX);
+		if (player->protocol_version < 50) {
+			// Client only supports TOCLIENT_SPAWN_PARTICLE,
+			// so turn the written particle into a packet immediately
+			NetworkPacket pkt(TOCLIENT_SPAWN_PARTICLE, particle_data_str.size(), player->getPeerId());
+			pkt.putRawString(particle_data_str);
+			Send(&pkt);
+		} else {
+			particle_batch_data << serializeString32(particle_data_str);
+		}
 	}
-	assert(protocol_version != 0);
 
-	NetworkPacket pkt(TOCLIENT_SPAWN_PARTICLE, 0, peer_id);
+	if (particle_batch_data.tellp() == 0)
+		return; // no batch to send
 
-	{
-		// NetworkPacket and iostreams are incompatible...
-		std::ostringstream oss(std::ios_base::binary);
-		p.serialize(oss, protocol_version);
-		pkt.putRawString(oss.str());
-	}
+	// Client supports TOCLIENT_SPAWN_PARTICLE_BATCH
+	assert(player->protocol_version >= 50);
+	std::ostringstream compressed(std::ios_base::binary);
+	compressZstd(particle_batch_data.str(), compressed);
 
+	NetworkPacket pkt(TOCLIENT_SPAWN_PARTICLE_BATCH,
+			4 + compressed.tellp(), player->getPeerId());
+	pkt.putLongString(compressed.str());
 	Send(&pkt);
 }
 
-// Adds a ParticleSpawner on peer with peer_id
-void Server::SendAddParticleSpawner(session_t peer_id, u16 protocol_version,
+void Server::SendSpawnParticles()
+{
+	for (const auto &[pname, particles] : m_particles_to_send) {
+		if (pname.empty())
+			continue; // sent to all clients
+
+		RemotePlayer *player = m_env->getPlayer(pname.c_str());
+		if (!player)
+			continue;
+
+		SendSpawnParticles(player, particles);
+	}
+
+	for (auto *player : m_env->getPlayers()) {
+		SendSpawnParticles(player, m_particles_to_send[""]);
+	}
+
+	m_particles_to_send.clear();
+}
+
+void Server::SendAddParticleSpawner(const std::string &to_player,
+	const std::string &exclude_player,
 	const ParticleSpawnerParameters &p, u16 attached_id, u32 id)
 {
 	static thread_local const float radius =
 			g_settings->getS16("max_block_send_distance") * MAP_BLOCKSIZE * BS;
+	const float radius_sq = radius * radius;
 
-	if (peer_id == PEER_ID_INEXISTENT) {
-		std::vector<session_t> clients = m_clients.getClientIDs();
-		const v3f pos = (
-			p.pos.start.min.val +
-			p.pos.start.max.val +
-			p.pos.end.min.val +
-			p.pos.end.max.val
-		) / 4.0f * BS;
-		const float radius_sq = radius * radius;
-		/* Don't send short-lived spawners to distant players.
-		 * This could be replaced with proper tracking at some point.
-		 * A lifetime of 0 means that the spawner exists forever.*/
-		const bool distance_check = !attached_id && p.time <= 1.0f && p.time != 0.0f;
+	// Average position where particles would spawn (approximate)
+	const v3f pos = (
+		p.pos.start.min.val +
+		p.pos.start.max.val +
+		p.pos.end.min.val +
+		p.pos.end.max.val
+	) / 4.0f * BS;
+	/* Don't send short-lived spawners to distant players.
+	 * This could be replaced with proper tracking at some point.
+	 * A lifetime of 0 means that the spawner exists forever. */
+	const bool distance_check = !attached_id && p.time <= 1.0f && p.time != 0.0f;
 
-		for (const session_t client_id : clients) {
-			RemotePlayer *player = m_env->getPlayer(client_id);
-			if (!player)
-				continue;
-
-			if (distance_check) {
-				PlayerSAO *sao = player->getPlayerSAO();
-				if (!sao)
-					continue;
-				if (sao->getBasePosition().getDistanceFromSQ(pos) > radius_sq)
-					continue;
-			}
-
-			SendAddParticleSpawner(client_id, player->protocol_version,
-				p, attached_id, id);
+	const auto &consider_player = [&] (RemotePlayer *player) {
+		if (distance_check) {
+			PlayerSAO *sao = player->getPlayerSAO();
+			if (!sao)
+				return;
+			if (sao->getBasePosition().getDistanceFromSQ(pos) > radius_sq)
+				return;
 		}
+
+		SendAddParticleSpawner(player->getPeerId(), player->protocol_version,
+			p, attached_id, id);
+	};
+
+	// Send to one -or- all (except one)
+	if (!to_player.empty()) {
+		RemotePlayer *player = m_env->getPlayer(to_player);
+		if (player)
+			consider_player(player);
 		return;
 	}
+	std::vector<session_t> clients = m_clients.getClientIDs();
+	for (const session_t client_id : clients) {
+		RemotePlayer *player = m_env->getPlayer(client_id);
+		if (!player)
+			continue;
+		if (!exclude_player.empty() && exclude_player == player->getName())
+			continue;
+		consider_player(player);
+	}
+}
+
+void Server::SendAddParticleSpawner(session_t peer_id, u16 protocol_version,
+	const ParticleSpawnerParameters &p, u16 attached_id, u32 id)
+{
+	assert(peer_id != PEER_ID_INEXISTENT);
 	assert(protocol_version != 0);
 
 	NetworkPacket pkt(TOCLIENT_ADD_PARTICLESPAWNER, 100, peer_id);
@@ -1908,7 +1958,7 @@ void Server::SendSetStars(session_t peer_id, const StarParams &params)
 
 	pkt << params.visible << params.count
 		<< params.starcolor << params.scale
-		<< params.day_opacity;
+		<< params.day_opacity << params.star_seed;
 
 	Send(&pkt);
 }
@@ -2862,7 +2912,7 @@ void Server::stepPendingDynMediaCallbacks(float dtime)
 			assert(m_media.count(name));
 			sanity_check(m_media[name].ephemeral);
 
-			fs::DeleteSingleFileOrEmptyDirectory(m_media[name].path);
+			fs::DeleteSingleFileOrEmptyDirectory(m_media[name].path, true);
 			m_media.erase(name);
 		}
 		getScriptIface()->freeDynamicMediaCallback(token);
@@ -3605,35 +3655,15 @@ void Server::spawnParticle(const std::string &playername,
 	if (!m_env)
 		return;
 
-	session_t peer_id = PEER_ID_INEXISTENT;
-	u16 proto_ver = 0;
-	if (!playername.empty()) {
-		RemotePlayer *player = m_env->getPlayer(playername.c_str());
-		if (!player)
-			return;
-		peer_id = player->getPeerId();
-		proto_ver = player->protocol_version;
-	}
-
-	SendSpawnParticle(peer_id, proto_ver, p);
+	m_particles_to_send[playername].push_back(p);
 }
 
 u32 Server::addParticleSpawner(const ParticleSpawnerParameters &p,
-	ServerActiveObject *attached, const std::string &playername)
+	ServerActiveObject *attached, const std::string &to_player,
+	const std::string &exclude_player)
 {
-	// m_env will be NULL if the server is initializing
 	if (!m_env)
 		return -1;
-
-	session_t peer_id = PEER_ID_INEXISTENT;
-	u16 proto_ver = 0;
-	if (!playername.empty()) {
-		RemotePlayer *player = m_env->getPlayer(playername.c_str());
-		if (!player)
-			return -1;
-		peer_id = player->getPeerId();
-		proto_ver = player->protocol_version;
-	}
 
 	u16 attached_id = attached ? attached->getId() : 0;
 
@@ -3643,13 +3673,12 @@ u32 Server::addParticleSpawner(const ParticleSpawnerParameters &p,
 	else
 		id = m_env->addParticleSpawner(p.time, attached_id);
 
-	SendAddParticleSpawner(peer_id, proto_ver, p, attached_id, id);
+	SendAddParticleSpawner(to_player, exclude_player, p, attached_id, id);
 	return id;
 }
 
 void Server::deleteParticleSpawner(const std::string &playername, u32 id)
 {
-	// m_env will be NULL if the server is initializing
 	if (!m_env)
 		throw ServerError("Can't delete particle spawners during initialisation!");
 
@@ -3661,7 +3690,11 @@ void Server::deleteParticleSpawner(const std::string &playername, u32 id)
 		peer_id = player->getPeerId();
 	}
 
+	// FIXME: we don't track which client still knows about this spawner, so
+	// just deleting it entirely is problematic!
+	// We also don't check if the ID is even in use. FAIL!
 	m_env->deleteParticleSpawner(id);
+
 	SendDeleteParticleSpawner(peer_id, id);
 }
 
@@ -3962,6 +3995,11 @@ void Server::setAsyncFatalError(const std::string &error)
 		m_thread->stop();
 }
 
+void Server::setAsyncFatalError(const LuaError &e)
+{
+	setAsyncFatalError(std::string("Lua: ") + e.what());
+}
+
 // Not thread-safe.
 void Server::addShutdownError(const ModError &e)
 {
@@ -3977,6 +4015,11 @@ void Server::addShutdownError(const ModError &e)
 			*m_shutdown_errmsg += "\n\n" + msg;
 		}
 	}
+}
+
+Map &Server::getMap()
+{
+	return m_env->getMap();
 }
 
 v3f Server::findSpawnPos()

@@ -4,7 +4,7 @@
 // Copyright (C) 2010-2013 blue42u, Jonathon Anderson <anderjon@umail.iu.edu>
 // Copyright (C) 2010-2013 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
 
-#include "client/hud.h"
+#include "hud.h"
 #include <string>
 #include <iostream>
 #include <cmath>
@@ -14,7 +14,6 @@
 #include "client.h"
 #include "inventory.h"
 #include "shader.h"
-#include "client/tile.h"
 #include "localplayer.h"
 #include "camera.h"
 #include "fontengine.h"
@@ -27,6 +26,8 @@
 #include "util/enriched_string.h"
 #include "irrlicht_changes/CGUITTFont.h"
 #include "gui/drawItemStack.h"
+#include <ICameraSceneNode.h>
+#include <IMesh.h>
 
 #define OBJECT_CROSSHAIR_LINE_SIZE 8
 #define CROSSHAIR_LINE_SIZE 10

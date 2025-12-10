@@ -4,18 +4,15 @@
 
 
 #include <cstdlib>
-#include <cmath>
 #include <algorithm>
 #include <iterator>
 #include <limits>
-#include <sstream>
 #include "guiFormSpecMenu.h"
 #include "EGUIElementTypes.h"
-#include "constants.h"
+#include "itemdef.h"
 #include "gamedef.h"
 #include "client/keycode.h"
 #include "gui/guiTable.h"
-#include "util/strfnd.h"
 #include <IGUIButton.h>
 #include <IGUICheckBox.h>
 #include <IGUIComboBox.h>
@@ -23,22 +20,18 @@
 #include <IGUIFont.h>
 #include <IGUITabControl.h>
 #include <IGUIImage.h>
-#include <IAnimatedMeshSceneNode.h>
+#include <AnimatedMeshSceneNode.h>
 #include "client/renderingengine.h"
 #include "client/joystick_controller.h"
 #include "log.h"
 #include "drawItemStack.h"
-#include "filesys.h"
-#include "gettime.h"
 #include "gettext.h"
-#include "scripting_server.h"
 #include "mainmenumanager.h"
 #include "porting.h"
 #include "settings.h"
 #include "client/client.h"
 #include "client/fontengine.h"
 #include "client/sound.h"
-#include "util/hex.h"
 #include "util/numeric.h"
 #include "util/string.h" // for parseColorString()
 #include "irrlicht_changes/static_text.h"
@@ -3871,8 +3864,6 @@ void GUIFormSpecMenu::acceptInput(FormspecQuitMode quitmode)
 						fields[name] = table->checkEvent();
 					}
 				} else if (s.ftype == f_DropDown) {
-					// No dynamic cast possible due to some distributions shipped
-					// without rtti support in Irrlicht
 					IGUIElement *element = getElementFromId(s.fid, true);
 					gui::IGUIComboBox *e = NULL;
 					if ((element) && (element->getType() == gui::EGUIET_COMBO_BOX)) {
@@ -3895,8 +3886,6 @@ void GUIFormSpecMenu::acceptInput(FormspecQuitMode quitmode)
 						}
 					}
 				} else if (s.ftype == f_TabHeader) {
-					// No dynamic cast possible due to some distributions shipped
-					// without rtti support in Irrlicht
 					IGUIElement *element = getElementFromId(s.fid, true);
 					gui::IGUITabControl *e = nullptr;
 					if ((element) && (element->getType() == gui::EGUIET_TAB_CONTROL)) {
@@ -3907,8 +3896,6 @@ void GUIFormSpecMenu::acceptInput(FormspecQuitMode quitmode)
 						fields[name] = itos(e->getActiveTab() + 1);
 					}
 				} else if (s.ftype == f_CheckBox) {
-					// No dynamic cast possible due to some distributions shipped
-					// without rtti support in Irrlicht
 					IGUIElement *element = getElementFromId(s.fid, true);
 					gui::IGUICheckBox *e = nullptr;
 					if ((element) && (element->getType() == gui::EGUIET_CHECK_BOX)) {
@@ -3922,11 +3909,9 @@ void GUIFormSpecMenu::acceptInput(FormspecQuitMode quitmode)
 							fields[name] = "false";
 					}
 				} else if (s.ftype == f_ScrollBar) {
-					// No dynamic cast possible due to some distributions shipped
-					// without rtti support in Irrlicht
 					IGUIElement *element = getElementFromId(s.fid, true);
 					GUIScrollBar *e = nullptr;
-					if (element && element->getType() == gui::EGUIET_ELEMENT)
+					if (element && element->getType() == gui::EGUIET_SCROLL_BAR)
 						e = static_cast<GUIScrollBar *>(element);
 
 					if (e) {
@@ -3936,8 +3921,6 @@ void GUIFormSpecMenu::acceptInput(FormspecQuitMode quitmode)
 							fields[name] = "VAL:" + itos(e->getPos());
 					}
 				} else if (s.ftype == f_AnimatedImage) {
-					// No dynamic cast possible due to some distributions shipped
-					// without rtti support in Irrlicht
 					IGUIElement *element = getElementFromId(s.fid, true);
 					GUIAnimatedImage *e = nullptr;
 					if (element && element->getType() == gui::EGUIET_ELEMENT)
